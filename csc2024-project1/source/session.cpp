@@ -6,6 +6,7 @@
 #include <netinet/tcp.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 
 #include <iostream>
@@ -19,9 +20,12 @@ Session::Session(const std::string& iface, ESPConfig&& cfg)
   checkError(sock = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_ALL)), "Create socket failed");
   // TODO: Setup sockaddr_ll
   sockaddr_ll addr_ll{};
-  // addr_ll.sll_family =
-  // addr_ll.sll_protocol =
-  // addr_ll.sll_ifindex =
+  addr_ll.sll_family = AF_PACKET;
+  addr_ll.sll_protocol = ETH_P_IP;
+  struct ifreq ifr;
+  strcpy(ifr.ifr_name, iface.c_str());
+  checkError(ioctl(sock, SIOCGIFINDEX, &ifr), "Failed to fine the index of the interface");
+  addr_ll.sll_ifindex = ifr.ifr_ifindex;
   checkError(bind(sock, reinterpret_cast<sockaddr*>(&addr_ll), sizeof(sockaddr_ll)), "Bind failed");
 }
 
@@ -76,11 +80,12 @@ void Session::dissectIPv4(std::span<uint8_t> buffer) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
   // TODO:
   // Set `recvPacket = true` if we are receiving packet from remote
-  //   state.recvPacket =
+  if (hdr.saddr == stringToIPv4(config.remote).s_addr) state.recvPacket = true;
   // Track current IP id
-  //   state.ipId = ;
+  state.ipId = hdr.id;
   // Call dissectESP(payload) if next protocol is ESP
-  //   auto payload = buffer.last(buffer.size() - headerLength);
+  auto payload = buffer.last(buffer.size() - (hdr.ihl << 2));
+  dissectESP(payload);
 }
 
 void Session::dissectESP(std::span<uint8_t> buffer) {
@@ -97,8 +102,10 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
 
   // TODO:
   // Track ESP sequence number
-  //   state.espseq = ;
+  state.espseq = *(((uint32_t*) buffer.data()) + 1);
   // Call dissectTCP(payload) if next protocol is TCP
+  auto payload = buffer.last(buffer.size() - 8); // the length of an ESP header is 8 bytes
+  dissectTCP(payload);
 }
 
 void Session::dissectTCP(std::span<uint8_t> buffer) {
@@ -106,10 +113,10 @@ void Session::dissectTCP(std::span<uint8_t> buffer) {
   auto length = hdr.doff << 2;
   auto payload = buffer.last(buffer.size() - length);
   // Track tcp parameters
-  // state.tcpseq =
-  // state.tcpackseq =
-  // state.srcPort =
-  // state.dstPort =
+  state.tcpseq = hdr.seq;
+  state.tcpackseq = hdr.ack_seq;
+  state.srcPort = hdr.source;
+  state.dstPort = hdr.dest;
 
   // Is ACK message?
   if (payload.empty()) return;
@@ -130,21 +137,21 @@ void Session::encapsulate(const std::string& payload) {
 int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& payload) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
   // TODO: Fill IP header
-  // hdr.version =
-  // hdr.ihl =
-  // hdr.ttl =
-  // hdr.id =
-  // hdr.protocol =
-  // hdr.frag_off =
-  // hdr.saddr =
-  // hdr.daddr =
+  hdr.version = 4; 
+  hdr.ihl = 5;
+  hdr.ttl = 64;
+  hdr.id = state.ipId;
+  hdr.protocol = IPPROTO_ESP;
+  hdr.frag_off = 0;
+  hdr.saddr = stringToIPv4(config.local).s_addr;
+  hdr.daddr = stringToIPv4(config.remote).s_addr;
   auto nextBuffer = buffer.last(buffer.size() - sizeof(iphdr));
 
   int payloadLength = encapsulateESP(nextBuffer, payload);
   payloadLength += sizeof(iphdr);
 
-  // hdr.tot_len =
-  // hdr.check =
+  hdr.tot_len = payloadLength;
+  hdr.check = 0;
   return payloadLength;
 }
 
@@ -152,8 +159,8 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
   auto&& hdr = *reinterpret_cast<ESPHeader*>(buffer.data());
   auto nextBuffer = buffer.last(buffer.size() - sizeof(ESPHeader));
   // TODO: Fill ESP header
-  // hdr.spi =
-  // hdr.seq =
+  hdr.spi = config.spi;
+  hdr.seq = state.espseq;
   int payloadLength = encapsulateTCP(nextBuffer, payload);
 
   auto endBuffer = nextBuffer.last(nextBuffer.size() - payloadLength);
@@ -161,8 +168,8 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
   uint8_t padSize = 0;
   payloadLength += padSize;
   // ESP trailer
-  // endBuffer[padSize] =
-  // endBuffer[padSize + 1] =
+  endBuffer[padSize] = padSize;
+  endBuffer[padSize + 1] = padSize;
   payloadLength += sizeof(ESPTrailer);
   // Do encryption
   if (!config.ealg->empty()) {
