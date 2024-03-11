@@ -137,7 +137,7 @@ void Session::encapsulate(const std::string& payload) {
 int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& payload) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
   // TODO: Fill IP header
-  hdr.version = 4; 
+  hdr.version = 4;
   hdr.ihl = 5;
   hdr.ttl = 64;
   hdr.id = state.ipId;
@@ -168,8 +168,8 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
   uint8_t padSize = 0;
   payloadLength += padSize;
   // ESP trailer
-  endBuffer[padSize] = padSize;
-  endBuffer[padSize + 1] = padSize;
+  // endBuffer[padSize] =
+  // endBuffer[padSize + 1] =
   payloadLength += sizeof(ESPTrailer);
   // Do encryption
   if (!config.ealg->empty()) {
@@ -181,9 +181,9 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
 
   if (!config.aalg->empty()) {
     // TODO: Fill in config.aalg->hash()'s parameter
-    // auto result = config.aalg->hash();
-    // std::copy(result.begin(), result.end(), buffer.begin() + payloadLength);
-    // payloadLength += result.size();
+    auto result = config.aalg->hash(std::span<uint8_t>{});
+    std::copy(result.begin(), result.end(), buffer.begin() + payloadLength);
+    payloadLength += result.size();
   }
   return payloadLength;
 }
@@ -192,13 +192,13 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
   auto&& hdr = *reinterpret_cast<tcphdr*>(buffer.data());
   if (!payload.empty()) hdr.psh = 1;
   // TODO: Fill TCP header
-  // hdr.ack =
-  // hdr.doff =
-  // hdr.dest =
-  // hdr.source =
-  // hdr.ack_seq =
-  // hdr.seq =
-  // hdr.window =
+  hdr.ack = state.sendAck;
+  hdr.doff = 5;
+  hdr.dest = state.srcPort;
+  hdr.source = state.dstPort;
+  hdr.ack_seq = state.tcpackseq;
+  hdr.seq = state.tcpseq;
+  hdr.window = 0;
   auto nextBuffer = buffer.last(buffer.size() - sizeof(tcphdr));
   int payloadLength = 0;
   if (!payload.empty()) {
@@ -206,9 +206,9 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
     payloadLength += payload.size();
   }
   // TODO: Update TCP sequence number
-  // state.tcpseq =
+  state.tcpseq = hdr.seq;
   payloadLength += sizeof(tcphdr);
   // TODO: Compute checksum
-  // hdr.check =
+  hdr.check = 0;
   return payloadLength;
 }
