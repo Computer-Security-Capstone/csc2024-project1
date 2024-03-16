@@ -49,14 +49,14 @@ std::optional<ESPConfig> getConfigFromSADB() {
         case SADB_EXT_ADDRESS_SRC: {
           struct sadb_address* addr = (struct sadb_address*)p;
           struct sockaddr_in* s = (struct sockaddr_in*) (addr + 1);
-          config.local = ipToString((uint32_t)s->sin_addr.s_addr);
+          config.remote = ipToString((uint32_t)s->sin_addr.s_addr);
           p += addr->sadb_address_len * 8;
           break;
         }
         case SADB_EXT_ADDRESS_DST: {
           struct sadb_address* addr = (struct sadb_address*)p;
           struct sockaddr_in* s = (struct sockaddr_in*) (addr + 1);
-          config.remote = ipToString((uint32_t)s->sin_addr.s_addr);
+          config.local = ipToString((uint32_t)s->sin_addr.s_addr);
           p += addr->sadb_address_len * 8;
           break;
         }
