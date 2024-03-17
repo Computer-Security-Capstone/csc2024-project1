@@ -78,15 +78,19 @@ void Session::dissectIPv4(std::span<uint8_t> buffer) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
   // TODO:
   // Set `recvPacket = true` if we are receiving packet from remote
-  if (hdr.saddr == stringToIPv4(config.remote).s_addr) state.recvPacket = true;
-  
+  if (hdr.saddr == stringToIPv4(config.remote).s_addr) 
+    state.recvPacket = true;
+  else 
+    state.recvPacket = false;
+   
   // Track current IP id
-  state.ipId = hdr.id;
+  if(hdr.saddr == stringToIPv4(config.local).s_addr) 
+    state.ipId = hdr.id;
 
   // Call dissectESP(payload) if next protocol is ESP
   auto payload = buffer.last(buffer.size() - (hdr.ihl << 2));
   auto &&next_hdr = reinterpret_cast<ESPHeader*>(payload.data());
-  if(hdr.protocol == IPPROTO_ESP) {
+  if(hdr.protocol == IPPROTO_ESP){
     dissectESP(payload);
   }
 }
@@ -107,28 +111,37 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
 
   // TODO:
   // Track ESP sequence number
-  state.espseq = hdr.seq;
+  if(!state.recvPacket){
+    state.espseq = hdr.seq;
+    config.spi = hdr.spi;
+  }
 
   // Call dissectTCP(payload) if next protocol is TCP
-  dissectTCP(payload);
+  auto next_hdr = payload.data()[payload.size()-1];
+  if(next_hdr == IPPROTO_TCP){
+    payload = payload.first(payload.size()-4);
+    dissectTCP(payload);
+  }
 }
 
 void Session::dissectTCP(std::span<uint8_t> buffer) {
   auto&& hdr = *reinterpret_cast<tcphdr*>(buffer.data());
   auto length = hdr.doff << 2;
   auto payload = buffer.last(buffer.size() - length);
+  
   // Track tcp parameters
-  state.tcpseq = hdr.seq;
-  state.tcpackseq = hdr.ack_seq;
-  state.srcPort = hdr.source;
-  state.dstPort = hdr.dest;
+  if(state.recvPacket) {
+    state.tcpseq = hdr.ack_seq;
+    state.tcpackseq = hdr.seq;
+    state.srcPort = hdr.dest;
+    state.dstPort = hdr.source;
+  }
 
   // Is ACK message?
   if (payload.empty()) return;
   // We only got non ACK when we receive secret, then we need to send ACK
   if (state.recvPacket) {
     state.sendAck = true;
-    std::cout << "payload size: " << payload.size() << std::endl;
     std::cout << "Secret received: " << std::string(payload.begin(), payload.end()) << "\n";
   }
 }
@@ -140,12 +153,6 @@ void Session::encapsulate(const std::string& payload) {
   sendto(sock, sendBuffer, totalLength, 0, reinterpret_cast<sockaddr*>(&addr), addrLen);
 }
 
-void printbit(uint16_t n){
-  for(int i=0;i<16;++i){
-    std::cout << (n & 1);
-    n >>= 1;
-  }
-}
 uint16_t ipv4_checksum(uint16_t* buffer, int size) {
   uint32_t sum = 0;
   for (int i = 0; i < size; i++) {
@@ -165,8 +172,8 @@ int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& paylo
   hdr.id = state.ipId;
   hdr.protocol = IPPROTO_ESP;
   hdr.frag_off = 0;
-  hdr.saddr = htonl(stringToIPv4(config.local).s_addr);
-  hdr.daddr = htonl(stringToIPv4(config.remote).s_addr);
+  hdr.saddr = stringToIPv4(config.local).s_addr; 
+  hdr.daddr = stringToIPv4(config.remote).s_addr;
   auto nextBuffer = buffer.last(buffer.size() - sizeof(iphdr));
 
   int payloadLength = encapsulateESP(nextBuffer, payload);
@@ -186,13 +193,16 @@ int Session::encapsulateESP(std::span<uint8_t> buffer, const std::string& payloa
   
   // TODO: Fill ESP header
   hdr.spi = config.spi;
-  hdr.seq = state.espseq;
+  hdr.seq = state.espseq + htonl(1);
   int payloadLength = encapsulateTCP(nextBuffer, payload);
   auto endBuffer = nextBuffer.last(nextBuffer.size() - payloadLength);
 
   // TODO: Calculate padding size and do padding in `endBuffer`
-  uint8_t padSize = 4- (payloadLength+sizeof(ESPTrailer)) % 4;
+  uint8_t padSize = 6 - payloadLength % 4;
   payloadLength += padSize;
+  for(int i = 0; i < padSize; i++) {
+    endBuffer[i] = i+1;
+  }
 
   // ESP trailer
   endBuffer[padSize] = padSize;
@@ -221,13 +231,13 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
   if (!payload.empty()) hdr.psh = 1;
 
   // TODO: Fill TCP header
-  hdr.ack = state.sendAck;
-  hdr.doff = htons(5);
-  hdr.dest = state.srcPort;
-  hdr.source = state.dstPort;
+  hdr.ack = 1;
+  hdr.doff = 5;
+  hdr.dest = state.dstPort;
+  hdr.source = state.srcPort;
   hdr.ack_seq = state.tcpackseq;
   hdr.seq = state.tcpseq;
-  hdr.window = htons(1024);
+  hdr.window = htons(502);
   auto nextBuffer = buffer.last(buffer.size() - sizeof(tcphdr));
   int payloadLength = 0;
   if (!payload.empty()) {
@@ -235,14 +245,36 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
     payloadLength += payload.size();
   }
 
+  // std::cout << htonl(state.tcpseq) << " " << state.tcpackseq << " " << payloadLength << "\n";
+  // std::cout << htonl(hdr.seq) << " " << hdr.ack_seq << " " << payloadLength << "\n";
+
   // TODO: Update TCP sequence number
-  state.tcpseq = hdr.seq;
+  state.tcpseq += payloadLength; //  ????
   payloadLength += sizeof(tcphdr);
   
   // TODO: Compute checksum, TCP check sum computes the ckecksum of the whole packet
   hdr.check = 0;
-  for (int i = 0; i < payloadLength; i += 2) {
-    hdr.check += (uint16_t) (nextBuffer[i] << 8 | nextBuffer[i + 1]);
+  uint32_t checksum = 0;
+  checksum += stringToIPv4(config.local).s_addr & 0xFFFF; 
+  checksum += stringToIPv4(config.local).s_addr >> 16;  
+  checksum += stringToIPv4(config.remote).s_addr & 0xFFFF;
+  checksum += stringToIPv4(config.remote).s_addr >> 16;
+  checksum += htons(IPPROTO_TCP);
+  checksum += htons(payloadLength);
+
+  // calculate header cksum
+  for(int i=0;i<sizeof(tcphdr)/2;i++) {
+    checksum += (buffer[i*2+1] << 8) + buffer[i*2];
   }
+  // calculate payload cksum
+  for(int i = 0; i < payloadLength/2; ++i) {
+    checksum += (nextBuffer[i*2+1] << 8) + nextBuffer[i*2];
+  }
+  if(payloadLength % 2 != 0) {
+    checksum += nextBuffer[payloadLength - 1]; 
+  }
+  checksum = (checksum & 0xFFFF) + (checksum >> 16);
+  hdr.check = ~checksum;
+
   return payloadLength;
 }
