@@ -118,8 +118,9 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
 
   // Call dissectTCP(payload) if next protocol is TCP
   auto next_hdr = payload.data()[payload.size()-1];
+  uint8_t padSize = payload.data()[payload.size()-2];
   if(next_hdr == IPPROTO_TCP){
-    payload = payload.first(payload.size()-4);
+    payload = payload.first(payload.size()-sizeof(ESPTrailer)-padSize);
     dissectTCP(payload);
   }
 }
@@ -142,7 +143,7 @@ void Session::dissectTCP(std::span<uint8_t> buffer) {
   // We only got non ACK when we receive secret, then we need to send ACK
   if (state.recvPacket) {
     state.sendAck = true;
-    std::cout << "Secret received: " << std::string(payload.begin(), payload.end()) << "\n";
+    std::cout << "Secret received: " << std::string(payload.begin(), payload.end()) << std::endl;
   }
 }
 
@@ -153,14 +154,6 @@ void Session::encapsulate(const std::string& payload) {
   sendto(sock, sendBuffer, totalLength, 0, reinterpret_cast<sockaddr*>(&addr), addrLen);
 }
 
-uint16_t ipv4_checksum(uint16_t* buffer, int size) {
-  uint32_t sum = 0;
-  for (int i = 0; i < size; i++) {
-    sum += buffer[i];
-  }
-  sum = (sum & 0xFFFF) + (sum >> 16);
-  return ~sum;
-}
 
 int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& payload) {
   auto&& hdr = *reinterpret_cast<iphdr*>(buffer.data());
@@ -183,7 +176,12 @@ int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& paylo
 
   // TODO: Compute checksum, IP check sum computes the ckecksum of the header
   hdr.check = 0;
-  hdr.check = ipv4_checksum(reinterpret_cast<uint16_t*>(&hdr), sizeof(iphdr)/2);
+  uint32_t checksum = 0;
+  for(int i=0;i<sizeof(iphdr)/2;i++) {
+    checksum += (buffer[i*2+1] << 8) + buffer[i*2];
+  }
+  checksum = (checksum & 0xFFFF) + (checksum >> 16);
+  hdr.check = ~checksum;
   return payloadLength;
 }
 
@@ -244,9 +242,6 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
     std::copy(payload.begin(), payload.end(), nextBuffer.begin());
     payloadLength += payload.size();
   }
-
-  // std::cout << htonl(state.tcpseq) << " " << state.tcpackseq << " " << payloadLength << "\n";
-  // std::cout << htonl(hdr.seq) << " " << hdr.ack_seq << " " << payloadLength << "\n";
 
   // TODO: Update TCP sequence number
   state.tcpseq += payloadLength; //  ????

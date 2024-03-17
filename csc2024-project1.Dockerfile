@@ -24,16 +24,16 @@ RUN mkdir /var/run/sshd
 EXPOSE 22
 
 # Copy the entire project directory
-COPY csc2024-project1 /home/csc2024/csc2024-project1
+# COPY csc2024-project1 /home/csc2024/csc2024-project1
 
 # Set the working directory
 WORKDIR /home/csc2024/csc2024-project1
 
 # Give execution permission to scripts, converting files with (CRLF) to (LF)
-RUN chmod +x scripts/config.sh && \
-    sed -i 's/\r$//' scripts/config.sh
+# RUN chmod +x scripts/config.sh && \
+#     sed -i 's/\r$//' scripts/config.sh
 
-# Build the project
-RUN cmake -S all -B build -D CMAKE_CXX_COMPILER=/usr/bin/g++-10 && \
-    cmake --build build --config Release --target client && \
-    cmake --build build --config Release --target server
+# # Build the project
+# RUN cmake -S all -B build -D CMAKE_CXX_COMPILER=/usr/bin/g++-10 && \
+#     cmake --build build --config Release --target client && \
+#     cmake --build build --config Release --target server

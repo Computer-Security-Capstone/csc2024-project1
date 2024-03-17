@@ -22,6 +22,8 @@ services:
         sleep infinity
     ports:
       - "4444:22"
+    volumes:
+      - ./csc2024-project1:/home/csc2024/csc2024-project1
 
   h2:
     image: csc2024-project1
@@ -45,6 +47,8 @@ services:
         sleep infinity
     ports:
       - "3333:22"
+    volumes: 
+      - ./csc2024-project1:/home/csc2024/csc2024-project1
 
 networks:
   IPSec:
