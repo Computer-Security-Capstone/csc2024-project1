@@ -132,8 +132,8 @@ void Session::dissectTCP(std::span<uint8_t> buffer) {
   
   // Track tcp parameters
   if(state.recvPacket) {
-    state.tcpseq = hdr.ack_seq;
-    state.tcpackseq = hdr.seq;
+    state.tcpseq = ntohl(hdr.ack_seq);
+    state.tcpackseq = ntohl(hdr.seq) + payload.size();
     state.srcPort = hdr.dest;
     state.dstPort = hdr.source;
   }
@@ -162,7 +162,7 @@ int Session::encapsulateIPv4(std::span<uint8_t> buffer, const std::string& paylo
   hdr.version = 4; 
   hdr.ihl = 5; 
   hdr.ttl = 64;
-  hdr.id = state.ipId;
+  hdr.id = state.ipId + 1;
   hdr.protocol = IPPROTO_ESP;
   hdr.frag_off = 0;
   hdr.saddr = stringToIPv4(config.local).s_addr; 
@@ -233,8 +233,8 @@ int Session::encapsulateTCP(std::span<uint8_t> buffer, const std::string& payloa
   hdr.doff = 5;
   hdr.dest = state.dstPort;
   hdr.source = state.srcPort;
-  hdr.ack_seq = state.tcpackseq;
-  hdr.seq = state.tcpseq;
+  hdr.ack_seq = htonl(state.tcpackseq);
+  hdr.seq = htonl(state.tcpseq);
   hdr.window = htons(502);
   auto nextBuffer = buffer.last(buffer.size() - sizeof(tcphdr));
   int payloadLength = 0;
