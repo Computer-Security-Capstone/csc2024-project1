@@ -113,7 +113,6 @@ void Session::dissectESP(std::span<uint8_t> buffer) {
   // Track ESP sequence number
   if(!state.recvPacket){
     state.espseq = hdr.seq;
-    config.spi = hdr.spi;
   }
 
   // Call dissectTCP(payload) if next protocol is TCP
